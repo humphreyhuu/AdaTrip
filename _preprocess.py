@@ -216,7 +216,7 @@ def prepare_input_supervised(input_data, encode_map, split): # split ∈ {"train
 
 
 if __name__ == "__main__":
-    data_path="./graph/data"
+    data_path = "./data"  # ./graph/data - depends on root directory
     parsed_path = os.path.join(data_path, 'parsed')
     os.makedirs(parsed_path, exist_ok=True)
     graph_path = os.path.join(data_path, 'graph')

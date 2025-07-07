@@ -3,33 +3,13 @@ import pickle
 import numpy as np
 from sklearn.metrics import r2_score
 from tqdm import tqdm
-import random
-
 import torch
-from utils import WindowDataset, inverse_transform_predictions
+from utils import WindowDataset, inverse_transform_predictions, TrainingLogger, seed_everything, _adjust_pretrain_time
 from torch.utils.data import DataLoader
 from models.gnn import ReservoirNet, ReservoirNetSeq2Seq, ReservoirAttentionNet
 from models.lstm import Seq2SeqLSTM, Seq2SeqLSTM_new, Transformer
 import torch.nn as nn
 import torch.optim.lr_scheduler as lr_scheduler
-
-
-def seed_everything(seed=42):
-    """
-    Set random seed for all libraries to ensure reproducibility.
-    
-    Args:
-        seed (int): Random seed value
-    """
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)  # if using multi-GPU
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    print(f"Random seed set to: {seed}")
 
 
 def run_epoch(loader, train=True):
@@ -258,9 +238,12 @@ if __name__ == "__main__":
     seed_everything(SEED)
 
     SCALER_TYPE = "local"  # ['global', 'local']
+    load_pretrain = True  # Set to True to load pretrained model and evaluate
+    pretrain_time = "202507062121"  # Timestamp of pretrained model to load
     print(f"Using scaler type: {SCALER_TYPE}")
+    print(f"Load pretrain: {load_pretrain}")
 
-    data_path="./graph/data"
+    data_path = "./data"  # ./graph/data - depends on root directory
     parsed_path = os.path.join(data_path, 'parsed')
     os.makedirs(parsed_path, exist_ok=True)
     graph_path = os.path.join(data_path, 'graph')
@@ -314,15 +297,15 @@ if __name__ == "__main__":
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     # device = torch.device('cpu')
     
-    model = Transformer(input_dim=X_train.shape[-1], hidden_dim=32, dropout=0.).to(device)
+    # model = Transformer(input_dim=X_train.shape[-1], hidden_dim=32, dropout=0.).to(device)
     # model = ReservoirAttentionNet(in_dim=X_train.shape[-1], hid_dim=128,
     #                               gnn_dim=64, lstm_dim=64, pred_days=7).to(device)
     # model = ReservoirNetSeq2Seq(in_dim=X_train.shape[-1], hid_dim=128,
     #                             gnn_dim=128, lstm_dim=64, pred_days=7).to(device)
     # model = ReservoirNet(in_dim=X_train.shape[-1], hid_dim=64,
     #                     gnn_dim=64, lstm_dim=128, pred_days=7).to(device)
-    # model = Seq2SeqLSTM(input_dim=X_train.shape[-1], hidden_dim=128,
-    #                     output_dim=1, num_layers=1, dropout=0.4).to(device)  # , dropout=0.4
+    model = Seq2SeqLSTM(input_dim=X_train.shape[-1], hidden_dim=128,
+                        output_dim=1, num_layers=1, dropout=0.).to(device)  # , dropout=0.4
     
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
@@ -335,6 +318,42 @@ if __name__ == "__main__":
     print(f"Number of parameters: {sum(p.numel() for p in model.parameters())}")
     print(model)
 
+    # Initialize training logger
+    model_name = model.__class__.__name__
+    logger = TrainingLogger(model_name, SCALER_TYPE)
+    
+    # Load pretrained model if requested
+    if load_pretrain:
+        # Adjust pretrain_time to find earliest available checkpoint if needed
+        adjusted_time = _adjust_pretrain_time(model_name, SCALER_TYPE, pretrain_time)
+        if adjusted_time is None:
+            print(f"ERROR: No checkpoint files found for model '{model_name}' with scaler type '{SCALER_TYPE}'")
+            exit(1)
+        
+        checkpoint_path = os.path.join("logs", model_name, SCALER_TYPE, f"checkpoint_{adjusted_time}.pth")
+        if os.path.exists(checkpoint_path):
+            print(f"Loading pretrained model from: {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"Loaded model from epoch {checkpoint['epoch']} with validation loss: {checkpoint['loss']:.6f}")
+            
+            # Evaluate the loaded model
+            print(f"Evaluating loaded pretrained model...")
+            overall_r2, daily_r2_scores, reservoir_r2_scores = evaluate_model(model, test_loader, encode_map, scaler_data)
+            print(f"Evaluation completed.")
+            exit()
+        else:
+            print(f"ERROR: Pretrained model not found at: {checkpoint_path}")
+            print(f"Available checkpoints in logs/{model_name}/{SCALER_TYPE}/:")
+            checkpoint_dir = os.path.join("logs", model_name, SCALER_TYPE)
+            if os.path.exists(checkpoint_dir):
+                for file in os.listdir(checkpoint_dir):
+                    if file.endswith('.pth'):
+                        print(f"  - {file}")
+            else:
+                print(f"  Directory does not exist: {checkpoint_dir}")
+            exit(1)
+    
     print(f"Training model...")
     for epoch in range(1, 11):
         train_loss = run_epoch(train_loader, train=True)
@@ -342,7 +361,18 @@ if __name__ == "__main__":
         current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
         
-        print(f'Epoch {epoch:3d}  Learning Rate: {current_lr:.6f}  Train Loss: {train_loss:.6f}  Val Loss: {val_loss:.6f}')
+        # Log epoch and save checkpoint if best
+        is_best = logger.log_epoch(epoch, train_loss, val_loss, current_lr)
+        if is_best:
+            logger.save_checkpoint(model, optimizer, epoch, val_loss)
 
     print(f"\nEvaluating model...")
     overall_r2, daily_r2_scores, reservoir_r2_scores = evaluate_model(model, test_loader, encode_map, scaler_data)
+    
+    # Save final training results
+    evaluation_info = f"\nFinal Evaluation Results:\n"
+    evaluation_info += f"Overall R2 Score: {overall_r2:.4f}\n"
+    evaluation_info += f"Daily R2 Scores: {[f'{r:.4f}' for r in daily_r2_scores]}\n"
+    evaluation_info += f"Model: {model_name}\n"
+    evaluation_info += f"Final Best Validation Loss: {logger.best_val_loss:.6f}\n"
+    logger.save_results(evaluation_info)

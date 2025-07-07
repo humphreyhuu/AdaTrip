@@ -5,7 +5,11 @@ import torch.nn as nn
 class Seq2SeqLSTM_v0(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim=1, num_layers=1, dropout=0.2):
         super(Seq2SeqLSTM_v0, self).__init__()
-        self.encoder = nn.LSTM(input_dim, hidden_dim, num_layers=num_layers, batch_first=True)
+        self.input_encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU()
+        )
+        self.encoder = nn.LSTM(hidden_dim, hidden_dim, num_layers=num_layers, batch_first=True)
         self.decoder = nn.LSTM(hidden_dim, hidden_dim, num_layers=num_layers, batch_first=True)
         self.fc1 = nn.Linear(hidden_dim, hidden_dim // 2)
         self.fc2 = nn.Linear(hidden_dim // 2, output_dim)
@@ -18,6 +22,7 @@ class Seq2SeqLSTM_v0(nn.Module):
         for node_idx in range(num_nodes):
             node_sequence = torch.stack([data.x[node_idx] for data in graph_list], dim=0)  # [seq_len, features]
             node_sequence = node_sequence.unsqueeze(0)  # [1, seq_len, features] - add batch dimension
+            node_sequence = self.input_encoder(node_sequence)  # [1, seq_len, hidden_dim]
             encoder_outputs, (hidden, cell) = self.encoder(node_sequence)
             decoder_input = encoder_outputs[:, -1:, :]  # Shape: [1, 1, hidden_dim]
             decoder_outputs = []
@@ -38,7 +43,11 @@ class Seq2SeqLSTM_v0(nn.Module):
 class Seq2SeqLSTM(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim=1, num_layers=1, dropout=0.):
         super(Seq2SeqLSTM, self).__init__()
-        self.encoder = nn.LSTM(input_dim, hidden_dim, num_layers=num_layers, batch_first=True)
+        self.input_encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU()
+        )
+        self.encoder = nn.LSTM(hidden_dim, hidden_dim, num_layers=num_layers, batch_first=True)
         self.decoder = nn.LSTM(hidden_dim, hidden_dim, num_layers=num_layers, batch_first=True)
         self.fc1 = nn.Linear(hidden_dim, hidden_dim // 2)
         self.fc2 = nn.Linear(hidden_dim // 2, output_dim)
@@ -48,6 +57,9 @@ class Seq2SeqLSTM(nn.Module):
     def forward(self, graph_list):
         # node_seq: [nodes, seq_len, feats] - process all nodes in parallel
         node_seq = torch.stack([g.x for g in graph_list], dim=1)
+        
+        # Apply input encoder
+        node_seq = self.input_encoder(node_seq)  # [nodes, seq_len, hidden_dim]
         
         # Encode all nodes at once
         encoder_outputs, (hidden, cell) = self.encoder(node_seq)  # h,c: [num_layers, nodes, hidden]
@@ -72,7 +84,11 @@ class Seq2SeqLSTM_new(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim=1,
                  num_layers=1, dropout=0.2):
         super().__init__()
-        self.encoder = nn.LSTM(input_dim, hidden_dim,
+        self.input_encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU()
+        )
+        self.encoder = nn.LSTM(hidden_dim, hidden_dim,
                                num_layers=num_layers,
                                batch_first=True,
                                dropout=dropout if num_layers > 1 else 0.0)
@@ -92,6 +108,7 @@ class Seq2SeqLSTM_new(nn.Module):
     def forward(self, graph_list):
         # node_seq: [nodes, seq_len, feats]
         node_seq = torch.stack([g.x for g in graph_list], dim=1)
+        node_seq = self.input_encoder(node_seq)  # [nodes, seq_len, hidden_dim]
         _, (h, c) = self.encoder(node_seq)  # h,c: [num_layers, nodes, hidden]
         dec_input = torch.zeros(node_seq.size(0), 1, h.size(-1),
                                 device=node_seq.device)  # [nodes, 1, hidden]

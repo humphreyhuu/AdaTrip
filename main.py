@@ -3,10 +3,8 @@ import pickle
 import numpy as np
 from sklearn.metrics import r2_score
 from tqdm import tqdm
-import random
-
 import torch
-from utils import WindowDataset, DynamicWindowDataset, inverse_transform_predictions
+from utils import WindowDataset, DynamicWindowDataset, inverse_transform_predictions, TrainingLogger, seed_everything, _adjust_pretrain_time
 from torch.utils.data import DataLoader
 from models.gnn import ReservoirAttentionNet
 import torch.nn as nn
@@ -109,20 +107,6 @@ def refine_edge_index_by_attention(base_edge_indices, timestep_attention_weights
     return refined_edge_indices
 
 
-def seed_everything(seed=42):
-    """Set random seed for all libraries to ensure reproducibility.
-    """
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    print(f"Random seed set to: {seed}")
-
-
 def run_epoch(loader, train=True, collect_attention=False):
     model.train() if train else model.eval()
     total_loss = 0
@@ -140,7 +124,7 @@ def run_epoch(loader, train=True, collect_attention=False):
                 preds.append(pred)
 
                 for t, att_tuple in enumerate(att_scores):
-                    alpha1, alpha2 = att_tuple
+                    _, alpha2 = att_tuple
                     attention_weights = alpha2.mean(dim=1)  # Average over attention heads -> [num_edges]
                     timestep_attention_weights[t].append(attention_weights)
             else:
@@ -331,13 +315,14 @@ if __name__ == "__main__":
     # Set random seed for reproducibility
     SEED = 42
     seed_everything(SEED)
-
-    # Configuration: Choose scaler type
-    SCALER_TYPE = "global"  # Choose: "global" or "local"
     
+    SCALER_TYPE = "local"  # ["global", "local"]
+    load_pretrain = True  # [True, False]
+    pretrain_time = "202507061331"  # Timestamp of pretrained model to load
     print(f"Using scaler type: {SCALER_TYPE}")
+    print(f"Load pretrain: {load_pretrain}")
 
-    data_path="./graph/data"
+    data_path = "./data"  # ./graph/data - depends on root directory
     parsed_path = os.path.join(data_path, 'parsed')
     os.makedirs(parsed_path, exist_ok=True)
     graph_path = os.path.join(data_path, 'graph')
@@ -414,9 +399,45 @@ if __name__ == "__main__":
 
     # Iterative graph refinement parameters
     iter_graph = True  # [True, False]
-    gat_threshold = 0.2
+    gat_threshold = 0.3
     refine_frequency = 4
 
+    # Initialize training logger
+    model_name = model.__class__.__name__
+    logger = TrainingLogger(model_name, SCALER_TYPE)
+    
+    # Load pretrained model if requested
+    if load_pretrain:
+        # Adjust pretrain_time to find earliest available checkpoint if needed
+        adjusted_time = _adjust_pretrain_time(model_name, SCALER_TYPE, pretrain_time)
+        if adjusted_time is None:
+            print(f"ERROR: No checkpoint files found for model '{model_name}' with scaler type '{SCALER_TYPE}'")
+            exit(1)
+        
+        checkpoint_path = os.path.join("logs", model_name, SCALER_TYPE, f"checkpoint_{adjusted_time}.pth")
+        if os.path.exists(checkpoint_path):
+            print(f"Loading pretrained model from: {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"Loaded model from epoch {checkpoint['epoch']} with validation loss: {checkpoint['loss']:.6f}")
+            
+            # Evaluate the loaded model
+            print(f"Evaluating loaded pretrained model...")
+            overall_r2, daily_r2_scores, reservoir_r2_scores = evaluate_model(model, test_loader, encode_map, scaler_data)
+            print(f"Evaluation completed.")
+            exit()
+        else:
+            print(f"ERROR: Pretrained model not found at: {checkpoint_path}")
+            print(f"Available checkpoints in logs/{model_name}/{SCALER_TYPE}/:")
+            checkpoint_dir = os.path.join("logs", model_name, SCALER_TYPE)
+            if os.path.exists(checkpoint_dir):
+                for file in os.listdir(checkpoint_dir):
+                    if file.endswith('.pth'):
+                        print(f"  - {file}")
+            else:
+                print(f"  Directory does not exist: {checkpoint_dir}")
+            exit(1)
+    
     print(f"Training model...")
     print(f"Iterative graph refinement: {'Enabled' if iter_graph else 'Disabled'}")
     if iter_graph:
@@ -469,7 +490,22 @@ if __name__ == "__main__":
                 refinement_info = f"{total_edges_removed} edges removed (avg {avg_edges_before:.1f} -> {avg_edges_after:.1f})"
                 print(f"\t Refinement info: {refinement_info}")
 
-        print(f'Epoch {epoch:3d}  Learning Rate: {current_lr:.6f}  Train Loss: {train_loss:.6f}  Val Loss: {val_loss:.6f}')
+        # Log epoch and save checkpoint if best
+        is_best = logger.log_epoch(epoch, train_loss, val_loss, current_lr)
+        if is_best:
+            logger.save_checkpoint(model, optimizer, epoch, val_loss)
 
     print(f"\nEvaluating model...")
     overall_r2, daily_r2_scores, reservoir_r2_scores = evaluate_model(model, test_loader, encode_map, scaler_data)
+    
+    # Save final training results
+    evaluation_info = f"\nFinal Evaluation Results:\n"
+    evaluation_info += f"Overall R2 Score: {overall_r2:.4f}\n"
+    evaluation_info += f"Daily R2 Scores: {[f'{r:.4f}' for r in daily_r2_scores]}\n"
+    evaluation_info += f"Model: {model_name}\n"
+    evaluation_info += f"Final Best Validation Loss: {logger.best_val_loss:.6f}\n"
+    evaluation_info += f"Iterative Graph Refinement: {'Enabled' if iter_graph else 'Disabled'}\n"
+    if iter_graph:
+        evaluation_info += f"GAT Attention Threshold: {gat_threshold}\n"
+        evaluation_info += f"Graph Refinement Frequency: every {refine_frequency} epochs\n"
+    logger.save_results(evaluation_info)

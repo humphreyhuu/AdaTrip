@@ -1,5 +1,23 @@
+import os
+import random
+import numpy as np
+import torch
 from torch_geometric.data import Data
 from torch.utils.data import Dataset
+
+
+def seed_everything(seed=42):
+    """Set random seed for all libraries to ensure reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if using multi-GPU
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    print(f"Random seed set to: {seed}")
+
 
 class WindowDataset(Dataset):
     def __init__(self, X, y, edge_index): # X: [N, 30days, 30nodes, F], y: [N, 30nodes, 7days]
@@ -195,4 +213,183 @@ def check_available_data_files(data_path):
     return available
 
 
+def create_logging_directory(model_name, scaler_type="global"):
+    """
+    Create logging directory structure for training records.
+    
+    Args:
+        model_name (str): Name of the model class
+        scaler_type (str): Type of scaler ("global" or "local")
+        
+    Returns:
+        tuple: (log_dir, timestamp) - directory path and timestamp string
+    """
+    import os
+    from datetime import datetime
+    
+    timestamp = datetime.now().strftime("%Y%m%d%H%M")
+    log_dir = os.path.join("logs", model_name, scaler_type)
+    os.makedirs(log_dir, exist_ok=True)
+    
+    return log_dir, timestamp
 
+
+def save_training_results(log_dir, results_text, timestamp):
+    """
+    Save training results to a file.
+    
+    Args:
+        log_dir (str): Directory to save the results
+        results_text (str): Training output text to save
+        timestamp (str): Timestamp for the filename
+    """
+    import os
+    
+    results_file = os.path.join(log_dir, f"results_{timestamp}.txt")
+    with open(results_file, 'w') as f:
+        f.write(results_text)
+    
+    print(f"Training results saved to: {results_file}")
+
+
+def save_best_checkpoint(log_dir, model, optimizer, epoch, loss, timestamp):
+    """
+    Save the best model checkpoint.
+    
+    Args:
+        log_dir (str): Directory to save the checkpoint
+        model: PyTorch model to save
+        optimizer: Optimizer state
+        epoch (int): Current epoch number
+        loss (float): Current loss value
+        timestamp (str): Timestamp for the filename
+    """
+    import os
+    import torch
+    
+    checkpoint_file = os.path.join(log_dir, f"checkpoint_{timestamp}.pth")
+    
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+        'timestamp': timestamp
+    }
+    
+    torch.save(checkpoint, checkpoint_file)
+    print(f"Best checkpoint saved to: {checkpoint_file}")
+
+
+class TrainingLogger:
+    """
+    A class to handle training logging and checkpointing.
+    """
+    
+    def __init__(self, model_name, scaler_type="global"):
+        self.model_name = model_name
+        self.scaler_type = scaler_type
+        self.log_dir, self.timestamp = create_logging_directory(model_name, scaler_type)
+        self.best_val_loss = float('inf')
+        self.training_logs = []
+        
+    def log_epoch(self, epoch, train_loss, val_loss, lr=None):
+        """
+        Log epoch information.
+        
+        Args:
+            epoch (int): Current epoch
+            train_loss (float): Training loss
+            val_loss (float): Validation loss
+            lr (float): Learning rate
+        """
+        log_entry = f'Epoch {epoch:3d}  '
+        if lr is not None:
+            log_entry += f'Learning Rate: {lr:.6f}  '
+        log_entry += f'Train Loss: {train_loss:.6f}  Val Loss: {val_loss:.6f}'
+        
+        self.training_logs.append(log_entry)
+        print(log_entry)
+        
+        # Save checkpoint if this is the best validation loss
+        if val_loss < self.best_val_loss:
+            self.best_val_loss = val_loss
+            return True
+        return False
+    
+    def save_checkpoint(self, model, optimizer, epoch, loss):
+        """
+        Save model checkpoint.
+        """
+        save_best_checkpoint(self.log_dir, model, optimizer, epoch, loss, self.timestamp)
+    
+    def save_results(self, additional_info=""):
+        """
+        Save all training results to file.
+        
+        Args:
+            additional_info (str): Additional information to include in results
+        """
+        results_text = f"Training Results for {self.model_name}\n"
+        results_text += f"Timestamp: {self.timestamp}\n"
+        results_text += f"Best Validation Loss: {self.best_val_loss:.6f}\n"
+        results_text += "="*50 + "\n"
+        results_text += "\n".join(self.training_logs)
+        
+        if additional_info:
+            results_text += "\n" + "="*50 + "\n"
+            results_text += additional_info
+        
+        save_training_results(self.log_dir, results_text, self.timestamp)
+
+
+def _adjust_pretrain_time(model_name, scaler_type, pretrain_time):
+    """
+    Adjust pretrain_time to find the earliest available checkpoint if the specified one doesn't exist.
+    
+    Args:
+        model_name (str): Name of the model class
+        scaler_type (str): Type of scaler ("global" or "local")
+        pretrain_time (str): Original pretrain time string
+        
+    Returns:
+        str: Adjusted pretrain time string or None if no checkpoints found
+    """
+    import os
+    import re
+    
+    # First check if the original pretrain_time exists
+    checkpoint_path = os.path.join("logs", model_name, scaler_type, f"checkpoint_{pretrain_time}.pth")
+    if os.path.exists(checkpoint_path):
+        print(f"Found checkpoint at specified time: {pretrain_time}")
+        return pretrain_time
+    
+    # If not found, look for available checkpoints in the directory
+    checkpoint_dir = os.path.join("logs", model_name, scaler_type)
+    if not os.path.exists(checkpoint_dir):
+        print(f"Warning: Checkpoint directory does not exist: {checkpoint_dir}")
+        return None
+    
+    # Find all checkpoint files
+    checkpoint_files = []
+    for file in os.listdir(checkpoint_dir):
+        if file.startswith("checkpoint_") and file.endswith(".pth"):
+            # Extract timestamp from filename
+            match = re.search(r'checkpoint_(\d+)\.pth', file)
+            if match:
+                timestamp = match.group(1)
+                checkpoint_files.append(timestamp)
+    
+    if not checkpoint_files:
+        print(f"Warning: No checkpoint files found in {checkpoint_dir}")
+        return None
+    
+    # Sort timestamps to find the earliest one
+    checkpoint_files.sort()
+    earliest_time = checkpoint_files[0]
+    
+    print(f"Original pretrain_time '{pretrain_time}' not found.")
+    print(f"Available checkpoints: {checkpoint_files}")
+    print(f"Using earliest checkpoint: {earliest_time}")
+    
+    return earliest_time

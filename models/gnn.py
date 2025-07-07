@@ -64,7 +64,7 @@ class GATLayer(nn.Module):
 
 
 class ReservoirNet(nn.Module):
-    def __init__(self, in_dim, hid_dim, gnn_dim, lstm_dim, pred_days, dropout=0.2, gnn_type='gcn'):
+    def __init__(self, in_dim, hid_dim, gnn_dim, lstm_dim, pred_days, dropout=0.4, gnn_type='gcn'):
         super().__init__()
         self.encoder = nn.Sequential(nn.Linear(in_dim, hid_dim),
                                      nn.ReLU(),
@@ -96,7 +96,7 @@ class ReservoirNet(nn.Module):
 
 
 class ReservoirNetSeq2Seq(nn.Module):
-    def __init__(self, in_dim, hid_dim, gnn_dim, lstm_dim, pred_days, dropout=0.4, gnn_type='gcn'):
+    def __init__(self, in_dim, hid_dim, gnn_dim, lstm_dim, pred_days, dropout=0.2, gnn_type='gcn'):
         super().__init__()
         self.encoder = nn.Sequential(nn.Linear(in_dim, hid_dim),
                                      nn.ReLU(),
