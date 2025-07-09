@@ -317,7 +317,7 @@ if __name__ == "__main__":
     seed_everything(SEED)
     
     SCALER_TYPE = "local"  # ["global", "local"]
-    load_pretrain = True  # [True, False]
+    load_pretrain = False  # [True, False]
     pretrain_time = "202507061331"  # Timestamp of pretrained model to load
     print(f"Using scaler type: {SCALER_TYPE}")
     print(f"Load pretrain: {load_pretrain}")
