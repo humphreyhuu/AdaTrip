@@ -419,7 +419,13 @@ if __name__ == "__main__":
             print(f"Loading pretrained model from: {checkpoint_path}")
             checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
             model.load_state_dict(checkpoint['model_state_dict'])
-            print(f"Loaded model from epoch {checkpoint['epoch']} with validation loss: {checkpoint['loss']:.6f}")
+            stored_val_loss = checkpoint['loss']
+            print(f"Loaded model from epoch {checkpoint['epoch']} with validation loss: {stored_val_loss:.6f}")
+            
+            # Recalculate validation loss with current model for verification
+            print(f"Recalculating validation loss for verification...")
+            current_val_loss = run_epoch(test_loader, train=False)
+            print(f"Current validation loss: {current_val_loss:.6f} (stored: {stored_val_loss:.6f}, diff: {abs(current_val_loss - stored_val_loss):.6f})")
             
             # Evaluate the loaded model
             print(f"Evaluating loaded pretrained model...")
@@ -446,6 +452,19 @@ if __name__ == "__main__":
 
     current_edge_indices = None
     original_edge_count = edge_index.shape[1]
+
+    # Initialize edge tracking for training (when load_pretrain=False)
+    if not load_pretrain:
+        edge_tracking_data = {
+            'epoch_edge_changes': [],
+            'original_edge_index': edge_index.clone(),
+            'original_edge_count': original_edge_count,
+            'refinement_parameters': {
+                'iter_graph': iter_graph,
+                'gat_threshold': gat_threshold,
+                'refine_frequency': refine_frequency
+            }
+        }
 
     for epoch in range(1, 11):
         # Training with potentially refined loader
@@ -479,6 +498,22 @@ if __name__ == "__main__":
                     avg_edges_before = edges_with_self_loops
 
                 refined_edge_indices = refine_edge_index_by_attention(base_edge_indices, avg_attention_weights, gat_threshold, num_nodes)
+                
+                # Track edge changes for analysis (when load_pretrain=False)
+                if not load_pretrain:
+                    edge_change_info = {
+                        'epoch': epoch,
+                        'edge_indices_before': [ei.clone() for ei in (base_edge_indices if isinstance(base_edge_indices, list) else [base_edge_indices])],
+                        'edge_indices_after': [ei.clone() for ei in refined_edge_indices],
+                        'total_edges_before': total_edges_before,
+                        'total_edges_after': sum(ei.shape[1] for ei in refined_edge_indices),
+                        'avg_edges_before': avg_edges_before,
+                        'avg_edges_after': sum(ei.shape[1] for ei in refined_edge_indices) / len(refined_edge_indices),
+                        'attention_weights': [aw.clone() if aw is not None else None for aw in avg_attention_weights],
+                        'threshold_used': gat_threshold
+                    }
+                    edge_tracking_data['epoch_edge_changes'].append(edge_change_info)
+                
                 current_edge_indices = refined_edge_indices
 
                 train_dataset = DynamicWindowDataset(X_train, y_train, refined_edge_indices)
@@ -494,6 +529,13 @@ if __name__ == "__main__":
         is_best = logger.log_epoch(epoch, train_loss, val_loss, current_lr)
         if is_best:
             logger.save_checkpoint(model, optimizer, epoch, val_loss)
+
+    # Save edge tracking data for analysis (when load_pretrain=False)
+    if not load_pretrain:
+        edge_tracking_filename = os.path.join("logs", model_name, SCALER_TYPE, f"edge_tracking_{logger.timestamp}.pkl")
+        with open(edge_tracking_filename, 'wb') as f:
+            pickle.dump(edge_tracking_data, f)
+        print(f"Edge tracking data saved to: {edge_tracking_filename}")
 
     print(f"\nEvaluating model...")
     overall_r2, daily_r2_scores, reservoir_r2_scores = evaluate_model(model, test_loader, encode_map, scaler_data)

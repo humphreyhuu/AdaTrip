@@ -238,8 +238,8 @@ if __name__ == "__main__":
     seed_everything(SEED)
 
     SCALER_TYPE = "local"  # ['global', 'local']
-    load_pretrain = True  # Set to True to load pretrained model and evaluate
-    pretrain_time = "202507062121"  # Timestamp of pretrained model to load
+    load_pretrain = True  # [True, False]
+    pretrain_time = "202507062121"  # Loading checkpoint time
     print(f"Using scaler type: {SCALER_TYPE}")
     print(f"Load pretrain: {load_pretrain}")
 
@@ -297,15 +297,15 @@ if __name__ == "__main__":
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     # device = torch.device('cpu')
     
-    # model = Transformer(input_dim=X_train.shape[-1], hidden_dim=32, dropout=0.).to(device)
+    model = Transformer(input_dim=X_train.shape[-1], hidden_dim=32, dropout=0.).to(device)
     # model = ReservoirAttentionNet(in_dim=X_train.shape[-1], hid_dim=128,
     #                               gnn_dim=64, lstm_dim=64, pred_days=7).to(device)
     # model = ReservoirNetSeq2Seq(in_dim=X_train.shape[-1], hid_dim=128,
     #                             gnn_dim=128, lstm_dim=64, pred_days=7).to(device)
     # model = ReservoirNet(in_dim=X_train.shape[-1], hid_dim=64,
     #                     gnn_dim=64, lstm_dim=128, pred_days=7).to(device)
-    model = Seq2SeqLSTM(input_dim=X_train.shape[-1], hidden_dim=128,
-                        output_dim=1, num_layers=1, dropout=0.).to(device)  # , dropout=0.4
+    # model = Seq2SeqLSTM(input_dim=X_train.shape[-1], hidden_dim=128,
+    #                     output_dim=1, num_layers=1, dropout=0.5).to(device)  # , dropout=0.4
     
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
@@ -335,7 +335,13 @@ if __name__ == "__main__":
             print(f"Loading pretrained model from: {checkpoint_path}")
             checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
             model.load_state_dict(checkpoint['model_state_dict'])
-            print(f"Loaded model from epoch {checkpoint['epoch']} with validation loss: {checkpoint['loss']:.6f}")
+            stored_val_loss = checkpoint['loss']
+            print(f"Loaded model from epoch {checkpoint['epoch']} with validation loss: {stored_val_loss:.6f}")
+            
+            # Recalculate validation loss with current model for verification
+            print(f"Recalculating validation loss for verification...")
+            current_val_loss = run_epoch(test_loader, train=False)
+            print(f"Current validation loss: {current_val_loss:.6f} (stored: {stored_val_loss:.6f}, diff: {abs(current_val_loss - stored_val_loss):.6f})")
             
             # Evaluate the loaded model
             print(f"Evaluating loaded pretrained model...")
