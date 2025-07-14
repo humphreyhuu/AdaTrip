@@ -59,10 +59,11 @@ class Seq2SeqLSTM(nn.Module):
         node_seq = torch.stack([g.x for g in graph_list], dim=1)
         
         # Apply input encoder
-        node_seq = self.input_encoder(node_seq)  # [nodes, seq_len, hidden_dim]
+        node_seq = self.input_encoder(node_seq)  # [nodes, seq_len, hidden_dim]  # Shape: [batch_size, seq_len, num_reservoirs * input_dim] . 
+                                                                                 #flattened_features = node_features.view(batch_size, seq_len, -1)
         
         # Encode all nodes at once
-        encoder_outputs, (hidden, cell) = self.encoder(node_seq)  # h,c: [num_layers, nodes, hidden]
+        encoder_outputs, (hidden, cell) = self.encoder(node_seq)  # h,c: [num_layers, nodes, hidden]  
         
         # Use last encoder output as decoder input
         decoder_input = encoder_outputs[:, -1:, :]  # Shape: [nodes, 1, hidden_dim]
