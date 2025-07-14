@@ -79,7 +79,7 @@ class Seq2SeqLSTM(nn.Module):
         predictions = torch.cat(decoder_outputs, dim=1)  # Shape: [nodes, 7]
         return predictions
 
-
+# Autoregressive Decoding: Error propagation ->  Prediction for day 2 depends on day 1 prediction
 class Seq2SeqLSTM_new(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim=1,
                  num_layers=1, dropout=0.2):
