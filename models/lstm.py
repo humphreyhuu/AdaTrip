@@ -43,7 +43,7 @@ class Seq2SeqLSTM_v0(nn.Module):
 class Seq2SeqLSTM(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim=1, num_layers=1, dropout=0.):
         super(Seq2SeqLSTM, self).__init__()
-        self.input_encoder = nn.Sequential(                 # processes all reservoir features together nn.Linear(input_dim * num_reservoirs, hidden_dim),
+        self.input_encoder = nn.Sequential(                
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU()
         )
@@ -59,8 +59,7 @@ class Seq2SeqLSTM(nn.Module):
         node_seq = torch.stack([g.x for g in graph_list], dim=1)
         
         # Apply input encoder
-        node_seq = self.input_encoder(node_seq)  # [nodes, seq_len, hidden_dim]  # Shape: [batch_size, seq_len, num_reservoirs * input_dim] . 
-                                                                                 #flattened_features = node_features.view(batch_size, seq_len, -1)
+        node_seq = self.input_encoder(node_seq)  # [nodes, seq_len, hidden_dim]  
         
         # Encode all nodes at once
         encoder_outputs, (hidden, cell) = self.encoder(node_seq)  # h,c: [num_layers, nodes, hidden]  
