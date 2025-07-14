@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.metrics import r2_score
 from tqdm import tqdm
 import torch
-from utils import WindowDataset, inverse_transform_predictions, TrainingLogger, seed_everything, _adjust_pretrain_time
+from utils import WindowDataset, inverse_transform_predictions, TrainingLogger, seed_everything, _adjust_checkpoint_time
 from torch.utils.data import DataLoader
 from models.gnn import ReservoirNet, ReservoirNetSeq2Seq, ReservoirAttentionNet
 from models.lstm import Seq2SeqLSTM, Seq2SeqLSTM_new, Transformer
@@ -238,10 +238,10 @@ if __name__ == "__main__":
     seed_everything(SEED)
 
     SCALER_TYPE = "local"  # ['global', 'local']
-    load_pretrain = True  # [True, False]
+    load_checkpoint = False  # [True, False]
     pretrain_time = "202507062121"  # Loading checkpoint time
     print(f"Using scaler type: {SCALER_TYPE}")
-    print(f"Load pretrain: {load_pretrain}")
+    print(f"Load checkpoint: {load_checkpoint}")
 
     data_path = "./data"  # ./graph/data - depends on root directory
     parsed_path = os.path.join(data_path, 'parsed')
@@ -267,9 +267,11 @@ if __name__ == "__main__":
     del all_rsr_data
     
     # Prepare input data for GNN
-    graph_cfg = "config3" # [config1, config2, config3]
+    graph_cfg = "k15_config3" # _k_n_nearest[config1, config2, config3]
     graph_path = os.path.join(data_path, 'graph')
     graph_file = os.path.join(graph_path, "%s.pkl" % graph_cfg)
+    print(f"Loading graph data from: {graph_file}")
+    
     # Load Graph Data
     with open(graph_file, 'rb') as f:
         graph_data = pickle.load(f)
@@ -288,6 +290,7 @@ if __name__ == "__main__":
     print(f"y_train: {y_train.shape}")
     print(f"X_test: {X_test.shape}")
     print(f"y_test: {y_test.shape}")
+    print(f"edge_index: {edge_index.shape}")
     
     train_loader = DataLoader(WindowDataset(X_train, y_train, edge_index),
                           batch_size=4, shuffle=True, collate_fn=lambda b: list(zip(*b)))
@@ -297,15 +300,15 @@ if __name__ == "__main__":
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     # device = torch.device('cpu')
     
-    model = Transformer(input_dim=X_train.shape[-1], hidden_dim=32, dropout=0.).to(device)
+    # model = Transformer(input_dim=X_train.shape[-1], hidden_dim=32, dropout=0.).to(device)
     # model = ReservoirAttentionNet(in_dim=X_train.shape[-1], hid_dim=128,
     #                               gnn_dim=64, lstm_dim=64, pred_days=7).to(device)
-    # model = ReservoirNetSeq2Seq(in_dim=X_train.shape[-1], hid_dim=128,
-    #                             gnn_dim=128, lstm_dim=64, pred_days=7).to(device)
+    model = ReservoirNetSeq2Seq(in_dim=X_train.shape[-1], hid_dim=128,
+                                gnn_dim=128, lstm_dim=64, pred_days=7).to(device)
     # model = ReservoirNet(in_dim=X_train.shape[-1], hid_dim=64,
     #                     gnn_dim=64, lstm_dim=128, pred_days=7).to(device)
-    # model = Seq2SeqLSTM(input_dim=X_train.shape[-1], hidden_dim=128,
-    #                     output_dim=1, num_layers=1, dropout=0.5).to(device)  # , dropout=0.4
+    # model = Seq2SeqLSTM(input_dim=X_train.shape[-1], hidden_dim=32,  # 128 64
+    #                     output_dim=1, num_layers=1, dropout=0.4).to(device)  # , dropout=0.5
     
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
@@ -321,11 +324,9 @@ if __name__ == "__main__":
     # Initialize training logger
     model_name = model.__class__.__name__
     logger = TrainingLogger(model_name, SCALER_TYPE)
-    
-    # Load pretrained model if requested
-    if load_pretrain:
-        # Adjust pretrain_time to find earliest available checkpoint if needed
-        adjusted_time = _adjust_pretrain_time(model_name, SCALER_TYPE, pretrain_time)
+
+    if load_checkpoint:
+        adjusted_time = _adjust_checkpoint_time(model_name, SCALER_TYPE, pretrain_time)
         if adjusted_time is None:
             print(f"ERROR: No checkpoint files found for model '{model_name}' with scaler type '{SCALER_TYPE}'")
             exit(1)
@@ -337,13 +338,11 @@ if __name__ == "__main__":
             model.load_state_dict(checkpoint['model_state_dict'])
             stored_val_loss = checkpoint['loss']
             print(f"Loaded model from epoch {checkpoint['epoch']} with validation loss: {stored_val_loss:.6f}")
-            
-            # Recalculate validation loss with current model for verification
+
             print(f"Recalculating validation loss for verification...")
             current_val_loss = run_epoch(test_loader, train=False)
             print(f"Current validation loss: {current_val_loss:.6f} (stored: {stored_val_loss:.6f}, diff: {abs(current_val_loss - stored_val_loss):.6f})")
-            
-            # Evaluate the loaded model
+
             print(f"Evaluating loaded pretrained model...")
             overall_r2, daily_r2_scores, reservoir_r2_scores = evaluate_model(model, test_loader, encode_map, scaler_data)
             print(f"Evaluation completed.")
@@ -374,8 +373,7 @@ if __name__ == "__main__":
 
     print(f"\nEvaluating model...")
     overall_r2, daily_r2_scores, reservoir_r2_scores = evaluate_model(model, test_loader, encode_map, scaler_data)
-    
-    # Save final training results
+
     evaluation_info = f"\nFinal Evaluation Results:\n"
     evaluation_info += f"Overall R2 Score: {overall_r2:.4f}\n"
     evaluation_info += f"Daily R2 Scores: {[f'{r:.4f}' for r in daily_r2_scores]}\n"

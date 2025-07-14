@@ -8,15 +8,17 @@ class GCNLayer(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.2):
         super(GCNLayer, self).__init__()
         self.conv1 = GCNConv(input_dim, hidden_dim, add_self_loops=True)
-        self.conv2 = GCNConv(hidden_dim, output_dim, add_self_loops=True)
-        self.dropout = nn.Dropout(dropout)
-        self.residual = nn.Linear(input_dim, output_dim)
+        # self.conv2 = GCNConv(hidden_dim, output_dim, add_self_loops=True)
+        # self.dropout = nn.Dropout(dropout)
+        # self.residual = nn.Linear(input_dim, output_dim)
 
     def forward(self, x, edge_index, edge_weight=None):
-        h = F.relu(self.conv1(x, edge_index, edge_weight))
-        h = self.dropout(h)
-        h = self.conv2(h, edge_index, edge_weight)
-        return h + self.residual(x)
+        # h = F.relu(self.conv1(x, edge_index, edge_weight))
+        # h = self.dropout(h)
+        # h = self.conv2(h, edge_index, edge_weight)
+        # return h + self.residual(x)
+        h = self.conv1(x, edge_index, edge_weight)
+        return h
 
 
 class GATLayer(nn.Module):

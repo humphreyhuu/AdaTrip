@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.metrics import r2_score
 from tqdm import tqdm
 import torch
-from utils import WindowDataset, DynamicWindowDataset, inverse_transform_predictions, TrainingLogger, seed_everything, _adjust_pretrain_time
+from utils import WindowDataset, DynamicWindowDataset, inverse_transform_predictions, TrainingLogger, seed_everything, _adjust_checkpoint_time
 from torch.utils.data import DataLoader
 from models.gnn import ReservoirAttentionNet
 import torch.nn as nn
@@ -105,6 +105,43 @@ def refine_edge_index_by_attention(base_edge_indices, timestep_attention_weights
             # print(f"Time step {t}: kept {refined_regular_edges.shape[1]}/{regular_edges.shape[1]} regular edges + {self_loop_edges.shape[1]} self-loops (threshold: {threshold})")
     
     return refined_edge_indices
+
+
+def load_pretrain_weights(model, scaler_type="global"):
+    """Load pretrained encoder weights into ReservoirAttentionNet"""
+    try:
+        pretrain_dir = f"./logs/PretrainModel/{scaler_type}"
+        if not os.path.exists(pretrain_dir):
+            print(f"Warning: Pretrain directory not found: {pretrain_dir}")
+            return False
+
+        pretrain_path = os.path.join(pretrain_dir, "pretrain_best_model.pth")
+        if not os.path.exists(pretrain_path):
+            print(f"Warning: Pretrain model not found: {pretrain_path}")
+            return False
+
+        checkpoint = torch.load(pretrain_path, map_location=model.encoder_mlp[0].weight.device, weights_only=False)
+        pretrain_state_dict = checkpoint['model_state_dict']
+
+        encoder_state_dict = {}
+        for key, value in pretrain_state_dict.items():
+            if key.startswith('window_embedding.encoder.'):
+                new_key = key.replace('window_embedding.encoder.', '')
+                encoder_state_dict[new_key] = value
+        
+        if not encoder_state_dict:
+            print("Warning: No encoder weights found in pretrained model")
+            return False
+
+        model.encoder_mlp.load_state_dict(encoder_state_dict, strict=True)
+
+        print(f"Successfully loaded pretrained encoder weights from: {pretrain_path}")
+        print(f"Loaded {len(encoder_state_dict)} parameter tensors")
+        return True
+
+    except Exception as e:
+        print(f"Error loading pretrained weights: {e}")
+        return False
 
 
 def run_epoch(loader, train=True, collect_attention=False):
@@ -317,9 +354,12 @@ if __name__ == "__main__":
     seed_everything(SEED)
     
     SCALER_TYPE = "local"  # ["global", "local"]
-    load_pretrain = False  # [True, False]
-    pretrain_time = "202507061331"  # Timestamp of pretrained model to load
+    load_checkpoint = False  # [True, False]
+    checkpoint_time = "202507061331"
+    load_pretrain = True  # [True, False] - Load pretrained encoder weights
+    
     print(f"Using scaler type: {SCALER_TYPE}")
+    print(f"Load checkpoint: {load_checkpoint}")
     print(f"Load pretrain: {load_pretrain}")
 
     data_path = "./data"  # ./graph/data - depends on root directory
@@ -402,38 +442,39 @@ if __name__ == "__main__":
     gat_threshold = 0.3
     refine_frequency = 4
 
+    # Load pretrained weights if requested and not loading checkpoint
+    pretrain_loaded = False
+    if load_pretrain and not load_checkpoint:
+        pretrain_loaded = load_pretrain_weights(model, SCALER_TYPE)
+    
     # Initialize training logger
     model_name = model.__class__.__name__
-    logger = TrainingLogger(model_name, SCALER_TYPE)
-    
-    # Load pretrained model if requested
-    if load_pretrain:
-        # Adjust pretrain_time to find earliest available checkpoint if needed
-        adjusted_time = _adjust_pretrain_time(model_name, SCALER_TYPE, pretrain_time)
+    logger = TrainingLogger(model_name, SCALER_TYPE, use_pretrain=pretrain_loaded)
+
+    if load_checkpoint:
+        adjusted_time = _adjust_checkpoint_time(model_name, SCALER_TYPE, checkpoint_time)
         if adjusted_time is None:
             print(f"ERROR: No checkpoint files found for model '{model_name}' with scaler type '{SCALER_TYPE}'")
             exit(1)
         
         checkpoint_path = os.path.join("logs", model_name, SCALER_TYPE, f"checkpoint_{adjusted_time}.pth")
         if os.path.exists(checkpoint_path):
-            print(f"Loading pretrained model from: {checkpoint_path}")
+            print(f"Loading checkpoint model from: {checkpoint_path}")
             checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
             model.load_state_dict(checkpoint['model_state_dict'])
             stored_val_loss = checkpoint['loss']
             print(f"Loaded model from epoch {checkpoint['epoch']} with validation loss: {stored_val_loss:.6f}")
-            
-            # Recalculate validation loss with current model for verification
+
             print(f"Recalculating validation loss for verification...")
             current_val_loss = run_epoch(test_loader, train=False)
             print(f"Current validation loss: {current_val_loss:.6f} (stored: {stored_val_loss:.6f}, diff: {abs(current_val_loss - stored_val_loss):.6f})")
-            
-            # Evaluate the loaded model
-            print(f"Evaluating loaded pretrained model...")
+
+            print(f"Evaluating loaded checkpointmodel...")
             overall_r2, daily_r2_scores, reservoir_r2_scores = evaluate_model(model, test_loader, encode_map, scaler_data)
             print(f"Evaluation completed.")
             exit()
         else:
-            print(f"ERROR: Pretrained model not found at: {checkpoint_path}")
+            print(f"ERROR: Loaded checkpoint model not found at: {checkpoint_path}")
             print(f"Available checkpoints in logs/{model_name}/{SCALER_TYPE}/:")
             checkpoint_dir = os.path.join("logs", model_name, SCALER_TYPE)
             if os.path.exists(checkpoint_dir):
@@ -453,8 +494,7 @@ if __name__ == "__main__":
     current_edge_indices = None
     original_edge_count = edge_index.shape[1]
 
-    # Initialize edge tracking for training (when load_pretrain=False)
-    if not load_pretrain:
+    if not load_checkpoint:
         edge_tracking_data = {
             'epoch_edge_changes': [],
             'original_edge_index': edge_index.clone(),
@@ -498,9 +538,8 @@ if __name__ == "__main__":
                     avg_edges_before = edges_with_self_loops
 
                 refined_edge_indices = refine_edge_index_by_attention(base_edge_indices, avg_attention_weights, gat_threshold, num_nodes)
-                
-                # Track edge changes for analysis (when load_pretrain=False)
-                if not load_pretrain:
+
+                if not load_checkpoint:
                     edge_change_info = {
                         'epoch': epoch,
                         'edge_indices_before': [ei.clone() for ei in (base_edge_indices if isinstance(base_edge_indices, list) else [base_edge_indices])],
@@ -530,8 +569,7 @@ if __name__ == "__main__":
         if is_best:
             logger.save_checkpoint(model, optimizer, epoch, val_loss)
 
-    # Save edge tracking data for analysis (when load_pretrain=False)
-    if not load_pretrain:
+    if not load_checkpoint:
         edge_tracking_filename = os.path.join("logs", model_name, SCALER_TYPE, f"edge_tracking_{logger.timestamp}.pkl")
         with open(edge_tracking_filename, 'wb') as f:
             pickle.dump(edge_tracking_data, f)

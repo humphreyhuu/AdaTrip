@@ -286,10 +286,16 @@ class TrainingLogger:
     A class to handle training logging and checkpointing.
     """
     
-    def __init__(self, model_name, scaler_type="global"):
+    def __init__(self, model_name, scaler_type="global", use_pretrain=False):
         self.model_name = model_name
         self.scaler_type = scaler_type
+        self.use_pretrain = use_pretrain
         self.log_dir, self.timestamp = create_logging_directory(model_name, scaler_type)
+        
+        # Add "_p" suffix to timestamp if using pretrain
+        if use_pretrain:
+            self.timestamp = self.timestamp + "_p"
+        
         self.best_val_loss = float('inf')
         self.training_logs = []
         
@@ -343,7 +349,7 @@ class TrainingLogger:
         save_training_results(self.log_dir, results_text, self.timestamp)
 
 
-def _adjust_pretrain_time(model_name, scaler_type, pretrain_time):
+def _adjust_checkpoint_time(model_name, scaler_type, pretrain_time):
     """
     Adjust pretrain_time to find the earliest available checkpoint if the specified one doesn't exist.
     

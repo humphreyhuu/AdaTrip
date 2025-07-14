@@ -272,7 +272,7 @@ def get_pretrain_config():
     config = {
         'model': {
             'input_dim': 3,
-            'hidden_dim': 64,
+            'hidden_dim': 128,
             'pred_days': 7,
             'dropout': 0.2,
             'momentum': 0.999
@@ -289,7 +289,7 @@ def get_pretrain_config():
             'contrastive_weight': 0.2
         },
         'data': {
-            'scaler_type': 'global'
+            'scaler_type': 'local'  # ['global', 'local']
         }
     }
     
@@ -300,8 +300,8 @@ def train_pretrain_model(config, data_dict, device):
     """Train pretrain model"""
     # Create data loader
     train_loader, reservoir_names = create_data_loader(
-        data_dict, 
-        batch_size=config['training']['batch_size'], 
+        data_dict,
+        batch_size=config['training']['batch_size'],
         shuffle=True,
         scaler_type=config['data']['scaler_type']
     )
