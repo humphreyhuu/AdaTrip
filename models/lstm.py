@@ -47,8 +47,8 @@ class Seq2SeqLSTM(nn.Module):
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU()
         )
-        self.encoder = nn.LSTM(hidden_dim, hidden_dim, num_layers=num_layers, batch_first=True)
-        self.decoder = nn.LSTM(hidden_dim, hidden_dim, num_layers=num_layers, batch_first=True)
+        self.encoder = nn.LSTM(hidden_dim, hidden_dim, num_layers=num_layers, batch_first=True, dropout=dropout)
+        self.decoder = nn.LSTM(hidden_dim, hidden_dim, num_layers=num_layers, batch_first=True, dropout=dropout)
         self.fc1 = nn.Linear(hidden_dim, hidden_dim // 2)
         self.fc2 = nn.Linear(hidden_dim // 2, output_dim)
         self.relu = nn.ReLU()
