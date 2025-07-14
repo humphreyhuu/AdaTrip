@@ -43,7 +43,7 @@ class Seq2SeqLSTM_v0(nn.Module):
 class Seq2SeqLSTM(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim=1, num_layers=1, dropout=0.):
         super(Seq2SeqLSTM, self).__init__()
-        self.input_encoder = nn.Sequential(                 # nn.Linear(input_dim * num_reservoirs, hidden_dim),
+        self.input_encoder = nn.Sequential(                 # processes all reservoir features together nn.Linear(input_dim * num_reservoirs, hidden_dim),
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU()
         )
