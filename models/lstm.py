@@ -124,13 +124,13 @@ class Seq2SeqLSTM_new(nn.Module):
 
 class Transformer(nn.Module):
     def __init__(self,
-                 input_dim:  int,    # 原始特征维度
-                 hidden_dim: int,    # Transformer 的核心维度 d_model
-                 pred_days:  int = 7,    # 预测天数
-                 num_layers: int = 2,    # Transformer 堆叠层数
-                 n_heads:    int = 4,    # 多头注意力头数
-                 dropout:    float = 0.2,  # Dropout
-                 input_days: int = 30):  # 输入序列长度
+                 input_dim:  int,    # Original feature dimension
+                 hidden_dim: int,    # Transformer hidden dimension (d_model)
+                 pred_days:  int = 7,    # Number of prediction days
+                 num_layers: int = 2,    # Number of Transformer stacked layers
+                 n_heads:    int = 4,    # Number of multi-head attention heads
+                 dropout:    float = 0.2,  # Dropout rate
+                 input_days: int = 30):  # Input sequence length in days
         super().__init__()
 
         self.d_model = hidden_dim
